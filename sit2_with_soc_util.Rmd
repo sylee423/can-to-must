@@ -1,0 +1,231 @@
+---
+title: "writing_df_sit2_0115_new_politeness"
+author: "Lee, Seo-young"
+date: "2025-12-30"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(tidyverse)
+library(truncnorm)
+#mean and sd for truncnorm (okayness) prior, encode world knowledge
+#mean is ft of proposition: different priors for different propositions
+mu <- 0.75
+sd <- 0.15
+
+
+#set of possible alternative utterances
+#"you can leave your dog outside", "you can bring your dog inside",
+# "you must leave your dog outside", "you must bring your dog inside"
+# null utterance (saying nothing)
+utt <- c("can_outside", "can_inside", "must_outside", "must_inside", 0)
+
+```
+
+```{r}
+#####literal listener####
+lit_listen <- function(ok, t, u){
+if(u == "can_outside"){
+indic <- ifelse(ok >t, 1, 0)
+denom <- ptruncnorm(1, a = 0, b = 1, mean = mu, sd = sd) - ptruncnorm(t, a = 0, b = 1, mean = mu, sd = sd)
+}
+else if (u == "can_inside"){
+indic <- ifelse(ok < 1-t, 1, 0)
+denom <- ptruncnorm(1-t, a = 0, b = 1, mean = mu, sd = sd) - ptruncnorm(0, a = 0, b = 1, mean = mu, sd = sd)
+}
+else if (u == "must_outside"){
+th <- ifelse(t > 0.5, t, 1-t) #if t is a vector then th will also be a vector
+indic <- ifelse(ok > th, 1, 0)
+denom <- ptruncnorm(1, a = 0, b = 1, mean = mu, sd = sd) - ptruncnorm(th, a = 0, b = 1, mean = mu, sd = sd)
+}
+else if (u == "must_inside"){
+th <- ifelse(t>0.5, t, 1-t)
+indic <- ifelse(ok < 1-th, 1, 0)
+denom <- ptruncnorm(1-th, a = 0, b = 1, mean = mu, sd = sd) - ptruncnorm(0, a = 0, b = 1, mean=mu, sd = sd)
+}
+else {
+indic <-  1
+denom <- 1
+}
+dtruncnorm(ok, a=0, b = 1, mean = mu, sd = sd) * indic / ifelse(denom!=0, denom, 1)
+}
+#tmp <- runif(1001, 0, 1)
+#plot(tmp, lit_listen(0.7, tmp, "must_outside"))
+#tempo <- c()
+#for(i in 1:length(tmp)){
+#tempo[i] <- lit_listen(0.7, tmp[i], "must_outside")
+#}
+#plot(tmp, tempo)
+```
+
+```{r}
+#########pragmatic speaker S1#########
+####epistemic utility####
+util_epi <- function(ok, t, u) log(lit_listen(ok, t, u))
+########social utility########
+valu <- function(t, u){
+sapply(t, function(t_i) ifelse(u == 0, 5, (1-t_i)*5))
+}
+lit_listen_thet <- function(ok, t, u){
+if(u == "can_outside"){
+indic <- ifelse(ok >t, 1, 0)
+denom <- ok
+}
+else if (u == "can_inside"){
+indic <- ifelse(1-ok > t, 1, 0)
+denom <- 1-ok
+}
+else if (u == "must_outside"){
+indic <- ifelse(ok > t & 1-ok < t, 1, 0)
+denom <- 2*ok-1
+}
+else if (u == "must_inside"){
+indic <- ifelse(ok < t & 1-ok > t, 1, 0)
+denom <- 1-(2*ok)
+}
+else if (u == 0){
+indic <-  1
+denom <- 1
+}
+1 * indic / ifelse(denom!=0, denom, 1)
+}
+util_soc_integrand <- function(ok, t, u){
+valu(t, u) * lit_listen_thet(ok,t,u)
+}
+x <- seq(from = 0, to = 1, length.out = 1001)
+util_soc_better <- function(ok, u){
+sapply(ok, function(ok_i) {
+mapply(function(ok_ii, u_ii){
+mean(util_soc_integrand(ok_ii, x, u_ii) *1)
+}, ok_i, u)
+})
+}
+# integrate lit_listen over theta to obtain P(A|u)
+lit_listen_integrated <- function(ok, u){
+sapply(ok, function(ok_i){
+mapply(function(ok_ii, u_ii){
+mean(lit_listen(ok_ii, x, u_ii) * 1)
+}, ok_i, u)
+})
+}
+util_soc_better_integrated <- function(u){
+sapply(u, function(u_i){
+mean(util_soc_better(x, u_i) * lit_listen_integrated(x, u_i))
+})
+}
+util_soc <- data.frame(cbind(utt, util_soc_better_integrated(utt)))
+colnames(util_soc) <- c("utt", "util")
+util_soc$util <- as.numeric(util_soc$util)
+#######speaker utility########
+pr <- 0.50 #proportion; corresponds to beta; can tweak
+# cost ft
+cost <- function(u) ifelse(u==0, 0, 2)
+util <- function(ok,t,u) pr*util_epi(ok, t, u) + (1-pr)*util_soc$util[util_soc$utt == as.character(u)] - cost(u)
+#######plug the above into pragmatic speaker#######
+alph <- 2
+prag_speak <- function(ok, t, u){
+numer <-  exp(alph * util(ok, t, u))
+denom <- 0
+for(ut in utt){
+denom <- denom + exp(alph * util(ok, t, ut))
+}
+#print(denom)
+numer / denom
+}
+#######test cases########
+ok_test <- 0.7
+thet_test <- 0.5
+for(ut in utt) print(prag_speak(ok_test, thet_test, ut))
+plot(x, prag_speak(x, 0.8, "can_outside"))
+```
+
+```{r}
+########pragmatic listener L1#########
+u_tmp <- "can_outside" #what the utterance is
+#denominator of pragmatic listener: double integral
+#inner integrand: bivariate function
+innerIntegrand <- function(ok_i, t_i, u= u_tmp) prag_speak(ok_i, t_i, u) * dtruncnorm(ok_i, a = 0, b= 1, mean = mu, sd = sd)
+###Monte Carlo integration####
+#first integrate on okayness
+#innerFunc <- function(s){ #s is vector of appropriate length
+#y <- seq(from = 0, to = 1, length.out = 1003)
+#mean(innerIntegrand(y, s) * 1)
+#}
+#outerIntegrand <- function(t) innerFunc(t)*1
+#seeing if changing the order of integration helps ---> this worked!!!!!!
+#integrating on theta first
+y <- seq(from = 0, to = 1, length.out = 1001)
+innerFunc <- function(p){
+sapply(p, function(p_i){
+mean(innerIntegrand(p_i, y) * 1)
+})
+}
+outerIntegrand <- function(p) innerFunc(p)*1
+z <- runif(1001)
+denominator <- mean(outerIntegrand(z))
+(denom_val <- denominator)
+x <- seq(from =0, to = 1, length.out = 1000)
+thet_marg <- function(thet, u = u_tmp){
+sapply(thet, function(t_i){
+mean(prag_listen(x, t_i))*1
+})
+}
+#check that this marginal dist'n is indeed a pdf, by integrating along theta
+#integrate(thet_marg, lower = 0, upper = 1)$value
+tmp <- runif(2000, 0, 1)
+thet_marg_output <- thet_marg(tmp)
+denominator <- mean(outerIntegrand(z))
+(denom_val <- denominator)
+#####plug the above into prag_listen ft#####
+prag_listen <- function(ok, t, u = u_tmp){
+numerator <- prag_speak(ok, t, u) * dtruncnorm(ok, a = 0, b = 1, mean = mu, sd = sd) * 1
+#return value
+numerator/ denom_val
+}
+#prag_listen(0.6, 0.3, "outside")
+plot(x, prag_listen(x, 0.8, "can_outside"))
+x <- seq(from =0, to = 1, length.out = 1000)
+thet_marg <- function(thet, u = u_tmp){
+sapply(thet, function(t_i){
+mean(prag_listen(x, t_i))*1
+})
+}
+#check that this marginal dist'n is indeed a pdf, by integrating along theta
+#integrate(thet_marg, lower = 0, upper = 1)$value
+tmp <- runif(2000, 0, 1)
+thet_marg_output <- thet_marg(tmp)
+thet_marg_output <- thet_marg(tmp)
+mean(thet_marg_output)
+ok_marg <- function(ok, u = u_tmp){
+sapply(ok, function(ok_i){
+mean(prag_listen(ok_i, x))*1
+})
+}
+ok_marg_output <- ok_marg(tmp)
+mean(ok_marg_output)
+###################plotting!#######################
+df <- cbind(tmp,
+rep(1, length(tmp)),
+ok_marg_output / mean(ok_marg_output),
+thet_marg_output / mean(thet_marg_output),
+dtruncnorm(tmp, a= 0, b= 1, mean = mu, sd = sd))
+df <- data.frame(df)
+colnames(df) <- c("x", "tprior", "okpost", "tpost", "okprior")
+plot_outside <-
+ggplot(data = df)+
+geom_point(aes(x = x, y = tprior), color = "black")+
+geom_smooth(aes(x = x, y = tpost ), color = "green")+
+geom_smooth(aes(x = x, y = okpost), color = "blue")+
+geom_smooth(aes(x = x, y = okprior), color = "red")+
+geom_smooth(aes(x = 1-x, y = okpost), color = "purple")
+plot_outside
+####write new csv#####
+write.csv(df, "df_sit2_0115_new_politeness.csv", row.names=FALSE)
+```
+
+
