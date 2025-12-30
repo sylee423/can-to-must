@@ -1,0 +1,419 @@
+---
+title: "ss2_deon_pos_modal"
+author: "Lee, Seoyoung"
+date: "2025-12-30"
+output: pdf_document
+---
+
+Basically change the truncnorm (0.5, 0.15^2) height prior to truncnorm (0.75, 0.15^2) "okayness" prior
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(truncnorm)
+```
+
+```{r}
+#mean and sd for truncnorm (okayness)
+#mean is ft of utterance: different priors for different utterances
+mu <- 0.75
+sd <- 0.15
+```
+
+```{r}
+#set of possible alternative utterances
+utt <- c("outside", "inside", 0)
+```
+
+
+ 
+
+
+
+```{r}
+### literal listener####
+lit_listen <- function(ok, t, u){
+  if(u == "outside"){
+    indic <- function(ok, t) ifelse(ok >t, 1, 0)
+    denom <- ptruncnorm(1, a = 0, b = 1, mean = mu, sd = sd) - ptruncnorm(t, a = 0, b = 1, mean = mu, sd = sd)
+  }
+  else if (u == "inside"){
+    indic <- function(ok, t) ifelse(ok < 1-t, 1, 0)
+    denom <- ptruncnorm(1-t, a = 0, b = 1, mean = mu, sd = sd) - ptruncnorm(0, a = 0, b = 1, mean = mu, sd = sd)
+  }
+  else {
+    indic <- function(ok, t) 1
+    denom <- 1
+  }
+  
+
+  
+  dtruncnorm(ok, a=0, b = 1, mean = mu, sd = sd) * indic(ok,t) / ifelse(denom!=0, denom, 1)
+}
+
+
+#tmp <- runif(1000, 0, 1)
+
+#plot(tmp, lit_listen(tmp, 0.6, "inside"))
+```
+
+
+
+```{r}
+#########pragmatic speaker S1#########
+# cost ft
+
+cost <- function(u) ifelse(u==0, 0, 2)
+
+alph <- 2
+
+
+prag_speak <- function(ok, t, u){
+  numer <-  exp(alph * (log(lit_listen(ok, t, u)) - cost(u)))
+  
+  denom <- 0
+  for(ut in utt){
+    denom <- denom + exp(alph * (log(lit_listen(ok, t, ut)) - cost(ut)))
+  }
+  
+  
+  numer / denom
+}
+  
+#lit_listen(0.5, 0.8, "short")
+#prag_speak(0.8, 0.7, "outside")
+#prag_speak(0.8, 0.7, "inside")
+#prag_speak(0.8, 0.7, 0)
+
+#######test cases########
+ok_test <- 0.95
+thet_test <- 0.3
+
+utt
+
+
+for(ut in utt) print(prag_speak(ok_test, thet_test, ut))
+
+
+
+```
+
+
+
+
+
+
+```{r}
+########pragmatic listener L1#########
+#denominator of pragmatic listener: double integral
+
+u_tmp <- "outside"
+
+innerIntegrand <- function(ok_i, t_i, u= u_tmp) prag_speak(ok_i, t_i, u) * dtruncnorm(ok_i, a = 0, b= 1, mean = mu, sd = sd) 
+  
+
+
+#Monte Carlo integration
+innerFunc <- function(s){ #s is vector of appropriate length
+    x <- runif(1000, min = 0, max = 1)
+    
+    mean(innerIntegrand(x, s) * 1)
+  
+}
+
+  
+outerIntegrand <- function(t) innerFunc(t)*1
+
+
+x <- runif(1000, min= 0, max = 1)
+denominator <- mean(outerIntegrand(x)) *1
+
+(denom_val <- denominator)
+```
+
+
+
+```{r}
+#####prag_listen ft####
+prag_listen <- function(ok, t, u = u_tmp){
+  numerator <- prag_speak(ok, t, u) * dtruncnorm(ok, a = 0, b = 1, mean = mu, sd = sd) * 1
+  
+  
+   #return value
+   numerator/ denom_val
+}
+
+
+#prag_listen(0.6, 0.3, "outside")
+#plot(tmp, prag_listen(tmp, 0.8, 0))
+```
+
+
+
+
+```{r}
+########now, derive the marginal dist'n of theta by integrating out ok##########
+
+
+#thet_marg <- function(thet, u = u_tmp) sapply(thet, function(t_i) integrate(prag_listen, lower = 0, upper = 1, t = t_i, u = u)$value) #integrate on A
+
+
+thet_marg <- function(thet, u = u_tmp){
+  sapply(thet, function(t_i){
+    
+    x <- runif(1000, min = 0, max = 1) 
+    mean(prag_listen(x, t_i))*1
+    
+  })
+  
+}
+
+
+
+#check that this marginal dist'n is indeed a pdf
+#integrate(thet_marg, lower = 0, upper = 1)$value
+tmp <- runif(1000, 0, 1)
+mean(thet_marg(tmp))
+
+
+```
+
+```{r}
+########now, derive the marginal dist'n of A by integrating out theta##########
+
+
+#integrate prag_listen on theta
+
+ok_marg <- function(ok, u = u_tmp){
+  sapply(ok, function(ok_i){
+    x <- runif(1000, min = 0, max = 1) 
+    mean(prag_listen(ok_i, x))*1
+    
+  })
+  
+}
+
+
+
+#check that this marginal dist'n is indeed a pdf
+#integrate(thet_marg, lower = 0, upper = 1)$value
+
+mean(ok_marg(tmp))
+
+df <- cbind(tmp, 
+            rep(1, length(tmp)), 
+            ok_marg(tmp), 
+            #df_in$okpost,
+            thet_marg(tmp), 
+            dtruncnorm(tmp, a= 0, b= 1, mean = mu, sd = sd))
+df <- data.frame(df)
+colnames(df) <- c("x", "tprior", "okpost", "tpost", "okprior")
+
+
+plot_outside <-
+  ggplot(data = df)+
+  geom_point(aes(x = x, y = tprior), color = "black")+
+  geom_smooth(aes(x = x, y = tpost), color = "green")+
+  geom_smooth(aes(x = x, y = okpost), color = "blue")+
+  geom_smooth(aes(x = x, y = okprior), color = "red")
+
+plot_outside
+
+```
+
+
+
+
+
+What happens to the posterior dist'n of expected utility of bringing the dog inside?
+
+```{r}
+mu_in <- 0.25
+sd <- 0.15
+utt <- c("outside", "inside", 0)
+```
+
+
+```{r}
+### literal listener####
+lit_listen_in <- function(ok, t, u){
+  if(u == "outside"){
+    indic <- function(ok, t) ifelse(1-ok >t, 1, 0)
+    denom <- ptruncnorm(1-t, a = 0, b = 1, mean = mu_in, sd = sd) - ptruncnorm(0, a = 0, b = 1, mean = mu_in, sd = sd)
+  }
+  else if (u == "inside"){
+    indic <- function(ok, t) ifelse(ok > t, 1, 0)
+    denom <- ptruncnorm(1, a = 0, b = 1, mean = mu_in, sd = sd) - ptruncnorm(t, a = 0, b = 1, mean = mu_in, sd = sd)
+  }
+  else {
+    indic <- function(ok, t) 1
+    denom <- 1
+  }
+  
+
+  
+  dtruncnorm(ok, a=0, b = 1, mean = mu_in, sd = sd) * indic(ok,t) / ifelse(denom!=0, denom, 1)
+}
+
+
+tmp <- runif(1000, 0, 1)
+
+plot(tmp, lit_listen_in(tmp, 0.6, "outside"))
+```
+
+
+
+```{r}
+#########pragmatic speaker S1#########
+# cost ft
+cost <- function(u) ifelse(u==0, 0, 2)
+
+alph <- 2
+
+prag_speak_in <- function(ok, t, u){
+  numer <-  exp(alph * (log(lit_listen_in(ok, t, u)) - cost(u)))
+  
+  denom <- 0
+  for(ut in utt){
+    denom <- denom + exp(alph * (log(lit_listen_in(ok, t, ut)) - cost(ut)))
+  }
+  
+  
+  numer / denom
+}
+  
+
+
+
+```
+
+
+
+
+
+
+```{r}
+########pragmatic listener L1#########
+#denominator of pragmatic listener: double integral
+
+u_tmp <- "outside"
+
+innerIntegrand_in <- function(ok_i, t_i, u= u_tmp) prag_speak_in(ok_i, t_i, u) * dtruncnorm(ok_i, a = 0, b= 1, mean = mu_in, sd = sd) 
+  
+
+
+#Monte Carlo integration
+innerFunc_in <- function(s){ #s is vector of appropriate length
+    x <- runif(1000, min = 0, max = 1)
+    
+    mean(innerIntegrand_in(x, s) * 1)
+  
+}
+
+  
+outerIntegrand_in <- function(t) innerFunc_in(t)*1
+
+
+x <- runif(1000, min= 0, max = 1)
+denominator_in <- mean(outerIntegrand_in(x)) *1
+
+(denom_val_in <- denominator_in)
+```
+
+
+
+```{r}
+#####prag_listen ft####
+prag_listen_in <- function(ok, t, u = u_tmp){
+  numerator <- prag_speak_in(ok, t, u) * dtruncnorm(ok, a = 0, b = 1, mean = mu_in, sd = sd) * 1
+  
+  
+   #return value
+   numerator/ denom_val_in
+}
+
+
+#prag_listen(0.6, 0.3, "outside")
+#plot(tmp, prag_listen(tmp, 0.8, 0))
+```
+
+
+
+
+```{r}
+########now, derive the marginal dist'n of theta by integrating out ok##########
+
+
+#thet_marg <- function(thet, u = u_tmp) sapply(thet, function(t_i) integrate(prag_listen, lower = 0, upper = 1, t = t_i, u = u)$value) #integrate on A
+
+
+thet_marg_in <- function(thet, u = u_tmp){
+  sapply(thet, function(t_i){
+    
+    x <- runif(1000, min = 0, max = 1) 
+    mean(prag_listen_in(x, t_i))*1
+    
+  })
+  
+}
+
+
+
+#check that this marginal dist'n is indeed a pdf
+#integrate(thet_marg, lower = 0, upper = 1)$value
+tmp <- runif(1000, 0, 1)
+mean(thet_marg_in(tmp))
+
+
+```
+
+```{r}
+########now, derive the marginal dist'n of A by integrating out theta##########
+
+
+#integrate prag_listen on theta
+
+ok_marg_in <- function(ok, u = u_tmp){
+  sapply(ok, function(ok_i){
+    x <- runif(1000, min = 0, max = 1) 
+    mean(prag_listen_in(ok_i, x))*1
+    
+  })
+  
+}
+
+
+
+#check that this marginal dist'n is indeed a pdf
+#integrate(thet_marg, lower = 0, upper = 1)$value
+
+mean(ok_marg_in(tmp))
+
+df_in <- cbind(tmp, 
+            rep(1, length(tmp)), 
+            ok_marg_in(tmp), 
+            thet_marg_in(tmp), 
+            dtruncnorm(tmp, a= 0, b= 1, mean = mu_in, sd = sd))
+df_in <- data.frame(df_in)
+colnames(df_in) <- c("x", "tprior", "okpost", "tpost", "okprior")
+
+
+plot_inside <-
+  ggplot(data = df)+
+  geom_point(aes(x = x, y = tprior), color = "black")+
+  geom_smooth(aes(x = x, y = tpost), color = "green")+
+  geom_smooth(aes(x = x, y = okpost), color = "purple")+
+  geom_smooth(aes(x = x, y = okprior), color = "red")
+
+plot_inside
+
+
+```
+
+
+
+
+
+
+
+
+
